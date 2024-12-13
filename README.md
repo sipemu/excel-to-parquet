@@ -9,6 +9,8 @@ A command-line tool written in Rust that converts Excel (XLSX) files to Parquet 
 - Skip rows option for files with headers not in the first row
 - Specify custom output directory
 - Simple command-line interface
+- Currently, no type inference, all data is stored as strings
+- First sheet is used. Currently, no support for selecting a specific sheet.
 
 ## Installation
 
@@ -73,6 +75,21 @@ cargo build
 
 # Release build
 cargo build --release
+```
+
+## Bash Script (Just for Linux)
+
+A bash script for bulk converting Excel files to Parquet format is added to the repository. The executable must be in the same directory as the script.
+
+```bash
+# Convert all Excel files, skip 2 rows
+./convert_excel_to_parquet.sh -s ./excel_files -t ./parquet_files -r 2
+
+# Convert all Excel files, no rows skipped
+./convert_excel_to_parquet.sh -s ./excel_files -t ./parquet_files
+
+# Show help
+./convert_excel_to_parquet.sh -h
 ```
 
 ## License
