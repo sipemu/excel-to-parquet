@@ -1,0 +1,61 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: excel-to-parquet
+            asset_name: excel-to-parquet-linux-amd64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: excel-to-parquet
+            asset_name: excel-to-parquet-macos-amd64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: excel-to-parquet.exe
+            asset_name: excel-to-parquet-windows-amd64.exe
+
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: ${{ matrix.target }}
+
+    - name: Build
+      run: cargo build --verbose --release --target ${{ matrix.target }}
+
+    - name: Prepare asset
+      shell: bash
+      run: |
+        cd target/${{ matrix.target }}/release
+        if [ "${{ matrix.os }}" = "windows-latest" ]; then
+          7z a ../../../${{ matrix.asset_name }}.zip ${{ matrix.artifact_name }}
+        else
+          tar -czf ../../../${{ matrix.asset_name }}.tar.gz ${{ matrix.artifact_name }}
+        fi
+        cd ../../..
+
+    - name: Release
+      uses: softprops/action-gh-release@v1
+      if: startsWith(github.ref, 'refs/tags/')
+      with:
+        files: |
+          ${{ matrix.asset_name }}.*
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 

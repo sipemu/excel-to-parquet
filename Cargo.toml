@@ -1,0 +1,15 @@
+[package]
+name = "excel-to-parquet"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+calamine = "*"
+polars = { version = "*", features = ["parquet", "dtype-full"] }
+anyhow = "1.0"
+clap = { version = "*", features = ["derive"] }
+
+[profile.release]
+opt-level = 's'
+strip = "debuginfo"
+lto = true
