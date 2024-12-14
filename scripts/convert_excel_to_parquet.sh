@@ -75,7 +75,6 @@ for excel_file in "$source_dir"/*.xlsx; do
     # Convert the file
     if ./excel-to-parquet -s "$skip_rows" -o "$target_dir" "$excel_file"; then
         ((converted_files++))
-        echo "Successfully converted: $filename"
     else
         ((failed_files++))
         echo "Failed to convert: $filename"

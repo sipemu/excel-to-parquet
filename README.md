@@ -1,6 +1,6 @@
 # Excel to Parquet Converter
 
-A command-line tool written in Rust that converts Excel (XLSX) files to Parquet format. This tool is designed to be simple and efficient, making it easy to convert Excel data for use with big data tools.
+A command-line tool written in Rust that converts Excel (XLSX) files to Parquet format. This tool is designed to be simple and efficient, making it easy to convert Excel data for use with modern data tools.
 
 ## Features
 

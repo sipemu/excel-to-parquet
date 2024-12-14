@@ -1,8 +1,16 @@
 use anyhow::{Context, Result};
+use arrow::array::{ArrayRef, StringArray};
+use arrow::datatypes::{DataType, Field, Schema};
+use arrow::record_batch::RecordBatch;
 use calamine::{open_workbook, Reader, Xlsx};
 use clap::Parser;
-use polars::prelude::*;
+use parquet::arrow::arrow_writer::ArrowWriter;
+use parquet::basic::Compression;
+use parquet::file::properties::WriterProperties;
+use std::collections::HashMap;
+use std::fs::File;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 #[derive(Parser)]
 #[command(author, version, about = "Convert Excel files to Parquet format")]
@@ -22,19 +30,26 @@ struct Cli {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    
+
     // Verify input file exists and has xlsx extension
     if !cli.excel_file.exists() {
         anyhow::bail!("Input file does not exist");
     }
-    
+
     if cli.excel_file.extension().and_then(|ext| ext.to_str()) != Some("xlsx") {
         anyhow::bail!("Input file must be an .xlsx file");
     }
 
     // Create output path replace .xlsx with .parquet
     let output_path: PathBuf = cli.output_path.join(
-        std::path::Path::new(&cli.excel_file.file_name().unwrap().to_str().unwrap().replace(".xlsx", ".parquet"))
+        std::path::Path::new(
+            &cli.excel_file
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .replace(".xlsx", ".parquet"),
+        ),
     );
 
     // Read Excel file
@@ -52,7 +67,7 @@ fn main() -> Result<()> {
         .worksheet_range(&sheet_name)
         .context("Failed to get worksheet")?;
 
-    // Convert to vectors for Polars DataFrame
+    // Get headers and handle empty/duplicate names
     let mut headers: Vec<String> = range
         .rows()
         .skip(cli.skip_rows)
@@ -62,58 +77,76 @@ fn main() -> Result<()> {
         .map(|cell| cell.to_string())
         .collect();
 
-    // Test headers on empty strings, if empty set to "Field_index"
-    // First pass: collect indices of empty headers
-    let empty_indices: Vec<_> = headers.iter()
-        .enumerate()
-        .filter(|(_, h)| h.is_empty())
-        .map(|(i, _)| i)
-        .collect();
-
-    // Fix empty headers
-    for i in empty_indices {
-        headers[i] = format!("Field_{}", i);
-    }
-
-    // Second pass: collect indices and values of duplicate headers
-    let mut seen = std::collections::HashMap::new();
-    let mut duplicates = Vec::new();
-    
-    for (i, header) in headers.iter().enumerate() {
-        if seen.insert(header.clone(), i).is_some() {
-            duplicates.push((i, header.clone()));
+    // Handle empty headers
+    for (i, header) in headers.iter_mut().enumerate() {
+        if header.is_empty() {
+            *header = format!("Field_{}", i);
         }
     }
 
-    // Fix duplicate headers
-    for (i, header) in duplicates {
-        if let Some(_) = seen.insert(header.clone(), i) {
-            headers[i] = format!("{}_{}", header, i);
+    // Handle duplicate headers
+    let mut seen = HashMap::new();
+    for i in 0..headers.len() {
+        let header = &headers[i];
+        let count = seen.entry(header.clone()).or_insert(0);
+        *count += 1;
+        if *count > 1 {
+            headers[i] = format!("{}_{}", header, count);
         }
     }
 
-    let data: Vec<Vec<String>> = range
-        .rows()
-        .skip(cli.skip_rows + 1)
-        .map(|row| row.iter().map(|cell| cell.to_string()).collect())
-        .collect();
+    // Create Arrow schema
+    let schema = Arc::new(Schema::new(
+        headers
+            .iter()
+            .map(|name| Field::new(name, DataType::Utf8, true))
+            .collect::<Vec<Field>>()
+    ));
 
-    // Create series for each column
-    let mut columns = Vec::new();
-    for (i, header) in headers.iter().enumerate() {
-        let values: Vec<String> = data.iter().map(|row| row[i].clone()).collect();
-        let series = Series::new(header.into(), values);
-        columns.push(series.into());
+    // Convert data to columns
+    let data_rows: Vec<_> = range.rows().skip(cli.skip_rows + 1).collect();
+    let num_rows = data_rows.len();
+    let mut columns: Vec<ArrayRef> = Vec::new();
+
+    // Create string arrays for each column
+    for col_idx in 0..headers.len() {
+        let values: Vec<Option<String>> = data_rows
+            .iter()
+            .map(|row| {
+                row.get(col_idx)
+                    .map(|cell| cell.to_string())
+            })
+            .collect();
+        
+        let string_array = StringArray::from(values);
+        columns.push(Arc::new(string_array));
     }
 
-    // Create DataFrame and write to Parquet
-    let mut df = DataFrame::new(columns)
-    .with_context(|| "Failed to create DataFrame")?;
+    // Create RecordBatch
+    let record_batch =
+        RecordBatch::try_new(schema.clone(), columns).context("Failed to create record batch")?;
 
-    ParquetWriter::new(std::fs::File::create(output_path.clone())?)
-        .finish(&mut df)
-        .with_context(|| format!("Failed to write Parquet file: {:?}", output_path))?;
+    // Set up Parquet writer properties
+    let props = WriterProperties::builder()
+        .set_compression(Compression::SNAPPY)
+        .build();
 
-    println!("Successfully converted {:?} to {:?}", cli.excel_file, output_path);
+    // Create Parquet file and writer
+    let file = File::create(&output_path).context("Failed to create output file")?;
+    let mut writer = ArrowWriter::try_new(file, schema, Some(props))
+        .context("Failed to create parquet writer")?;
+
+    // Write the record batch
+    writer
+        .write(&record_batch)
+        .context("Failed to write record batch")?;
+
+    // Close the writer
+    writer.close().context("Failed to close writer")?;
+
+    println!(
+        "Successfully converted {:?} to {:?} ({} rows)",
+        cli.excel_file, output_path, num_rows
+    );
     Ok(())
 }
